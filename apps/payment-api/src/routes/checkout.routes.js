@@ -371,6 +371,12 @@ export function registerCheckoutRoutes(server, ctx) {
         primaryColor: '#2563eb',
         ...(merchant?.branding || {})
       };
+      // The storefront prints this reference on its success receipt, and it lived only on the
+      // observation — no read route exposed it — so a verified payment could not quote its own UTR.
+      const attributedObservation = session.attributedObservationId && ctx.obsRepo
+        ? ctx.obsRepo.findById(session.attributedObservationId)
+        : null;
+      const bankReferenceNumber = attributedObservation?.bankReferenceNumber || null;
       HttpServer.json(res, 200, {
         id: session.id,
         paymentId: session.id,
@@ -381,6 +387,8 @@ export function registerCheckoutRoutes(server, ctx) {
         status: session.status,
         timeRemainingSeconds: 0,
         isTerminal: true,
+        bankReferenceNumber,
+        bankRef: bankReferenceNumber,
         branding
       });
       return;

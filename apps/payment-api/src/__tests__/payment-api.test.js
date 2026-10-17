@@ -532,6 +532,13 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(checkL1.body.verificationLevel, 1);
     assert.deepEqual(checkL1.body.verificationSources, ['GOOGLE_MESSAGES']);
 
+    // The storefront's success receipt reads the reference off the terminal checkout state, so it
+    // must be the bank's own UTR — not a placeholder and not the payment id.
+    const stateL1 = await request(`/api/v1/checkout/${paymentId}/state`);
+    assert.equal(stateL1.body.isTerminal, true);
+    assert.equal(stateL1.body.bankReferenceNumber, 'UTR-TIER-001');
+    assert.equal(stateL1.body.bankRef, 'UTR-TIER-001');
+
     // 4. Observation 2: Gmail arrives 2 seconds later -> Upgrades to Level 2 (Dual Verification: SMS + Gmail)
     const obs2 = await request('/api/v1/pollers/events', {
       method: 'POST',
@@ -559,6 +566,27 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.ok(pRecord);
     assert.equal(pRecord.verificationLevel, 2);
     assert.equal(pRecord.verificationSources.length, 2);
+  });
+
+  test('Terminal checkout state reports no bank reference rather than inventing one', async () => {
+    const payRes = await request('/api/v1/payments', {
+      method: 'POST',
+      body: {
+        orderId: 'NO-UTR-ORD-1',
+        amount: '77.00',
+        autoActivate: true
+      }
+    });
+    const paymentId = payRes.body.paymentId;
+
+    // Cancelled without any bank observation — there is no UTR to report.
+    const cancelled = await request(`/api/v1/checkout/${paymentId}/cancel`, { method: 'POST' });
+    assert.equal(cancelled.status, 200);
+
+    const state = await request(`/api/v1/checkout/${paymentId}/state`);
+    assert.equal(state.body.isTerminal, true);
+    assert.equal(state.body.bankReferenceNumber, null);
+    assert.equal(state.body.bankRef, null);
   });
 
   test('Merchant webhook URL & secret persistence and HMAC-SHA256 signed event delivery', async () => {

@@ -228,14 +228,16 @@ export class CoinWalletStoreServer {
         try { this.orderSuccessHtml = fs.readFileSync(path.join(__dirname, 'order-success.html'), 'utf8'); } catch {}
         const orderId = url.searchParams.get('order_id') || url.searchParams.get('orderId') || 'ORDER-DEMO';
         const amount = url.searchParams.get('amount') || '499.00';
-        const utr = url.searchParams.get('utr') || url.searchParams.get('bankRef') || '123456789012';
+        // Never invent a reference: a settlement with no bank observation has no UTR, and a
+        // plausible-looking dummy (this defaulted to '123456789012') reads as a real one.
+        const utr = url.searchParams.get('utr') || url.searchParams.get('bankRef') || '';
         const mode = url.searchParams.get('mode') || url.searchParams.get('payment_mode') || 'UPI';
         const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
         let rendered = this.orderSuccessHtml
           .replaceAll('{{ORDER_ID}}', orderId)
           .replaceAll('{{AMOUNT}}', amount)
-          .replaceAll('{{UTR}}', utr)
+          .replaceAll('{{UTR}}', utr || '—')
           .replaceAll('{{MODE}}', mode)
           .replaceAll('{{TIMESTAMP}}', timestamp);
 

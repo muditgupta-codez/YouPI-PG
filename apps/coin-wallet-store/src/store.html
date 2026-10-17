@@ -1794,7 +1794,7 @@ app.post('/api/youpi-webhook', express.raw({ type: 'application/json' }), (req, 
           handler: function(paymentResponse) {
             btn.disabled = false;
             btn.innerHTML = oldHtml;
-            showCelebrationModal(data.orderId, paymentResponse.utr || paymentResponse.paymentId || data.paymentId, currentAmount);
+            showCelebrationModal(data.orderId, paymentResponse.paymentId || data.paymentId, currentAmount);
           },
           onClose: function() {
             btn.disabled = false;
