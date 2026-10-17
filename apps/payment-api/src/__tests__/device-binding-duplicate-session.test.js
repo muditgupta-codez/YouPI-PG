@@ -405,7 +405,7 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     assert.equal(stateB.body.canClickPaymentDone, true);
   });
 
-  test('9. Prompt 64 Queue Invariant: When Session A is terminated, existing queued Customer C is promoted to ACTIVE, and new Session B is queued at position 1', async () => {
+  test('9. Prompt 64 Concurrency Invariant: when Session A is terminated, concurrent Customer C keeps its active slot and new Session B activates on its own amount', async () => {
     // Reset any lingering sessions and clear receiving account slot from prior tests
     testDb.execute("UPDATE payment_sessions SET status = 'CANCELLED' WHERE status IN ('ACTIVE', 'PROCESSING', 'QUEUED')");
     testDb.execute("UPDATE payment_receiving_accounts SET is_slot_busy = 0, current_active_session_id = NULL");
@@ -433,14 +433,14 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     const sADb = testDb.db.prepare('SELECT status, receiving_account_id FROM payment_sessions WHERE id = ?').get(sAId);
     assert.equal(sADb.status, 'ACTIVE');
 
-    // 2. Customer C arrives concurrently and gets queued
+    // 2. Customer C arrives concurrently -> active immediately on its own amount
     const sCRes = await request('/api/v1/payments', {
       method: 'POST',
       headers: { 'x-device-id': devCId },
       body: {
         orderId: 'ORDER_P64_Q9_C',
         amount: 300.00,
-        customerName: 'Queued Customer C',
+        customerName: 'Concurrent Customer C',
         customerPhone: '+918888777702',
         customerEmail: 'userc@example.com',
         autoActivate: true
@@ -448,8 +448,8 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
     });
     const sCId = sCRes.body.paymentId;
     const sCDb = testDb.db.prepare('SELECT status, queue_position FROM payment_sessions WHERE id = ?').get(sCId);
-    assert.equal(sCDb.status, 'QUEUED');
-    assert.equal(sCDb.queue_position, 1);
+    assert.equal(sCDb.status, 'ACTIVE');
+    assert.equal(sCDb.queue_position, 0);
 
     // 3. User A moves from Laptop (devLId) to Mobile (devMId) and ends Session A
     const restartRes = await request(`/api/v1/checkout/${sAId}/end-and-restart-payment`, {
@@ -475,15 +475,17 @@ describe('YOUPI PG: Device Binding & Duplicate Session Detection', () => {
 
     const receivingAcc = testDb.db.prepare('SELECT is_slot_busy, current_active_session_id FROM payment_receiving_accounts WHERE id = ?').get(sADb.receiving_account_id);
     assert.equal(receivingAcc.is_slot_busy, 1);
-    assert.equal(receivingAcc.current_active_session_id, sCId);
+    // The account now carries several live sessions, so the pointer tracks the
+    // most recent activation instead of being the only session.
+    assert.ok([sCId, restartRes.body.newSessionId].includes(receivingAcc.current_active_session_id));
 
-    // New Session B on devMId must be legitimately queued behind Customer C
-    assert.equal(restartRes.body.status, 'QUEUED');
-    assert.equal(restartRes.body.queuePosition, 1);
+    // New Session B on devMId also activates straight away, on its own amount
+    assert.equal(restartRes.body.status, 'ACTIVE');
+    assert.equal(restartRes.body.queuePosition, 0);
 
     const sBDb = testDb.db.prepare('SELECT status, queue_position, device_id FROM payment_sessions WHERE id = ?').get(restartRes.body.newSessionId);
-    assert.equal(sBDb.status, 'QUEUED');
-    assert.equal(sBDb.queue_position, 1);
+    assert.equal(sBDb.status, 'ACTIVE');
+    assert.equal(sBDb.queue_position, 0);
     assert.equal(sBDb.device_id, devMId);
   });
 

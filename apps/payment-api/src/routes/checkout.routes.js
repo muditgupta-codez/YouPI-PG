@@ -745,6 +745,10 @@ export function registerCheckoutRoutes(server, ctx) {
       if (queueResult.expiresAt) {
         ctx.timingEngine.startActiveTimer(session.id, queueResult.expiresAt);
       }
+      // A busy account yields a unique payable amount instead of a queue slot.
+      if (queueResult.amountPaise !== undefined) {
+        session.amountPaise = queueResult.amountPaise;
+      }
       server.broadcastSse(session.id, 'status_change', {
         status: queueResult.status,
         queuePosition: queueResult.queuePosition,
@@ -849,6 +853,10 @@ export function registerCheckoutRoutes(server, ctx) {
       queueResult = ctx.queueEngine.enqueueOrActivate(session.id, targetAccountId);
       if (queueResult.expiresAt) {
         ctx.timingEngine.startActiveTimer(session.id, queueResult.expiresAt);
+      }
+      // A busy account yields a unique payable amount instead of a queue slot.
+      if (queueResult.amountPaise !== undefined) {
+        session.amountPaise = queueResult.amountPaise;
       }
       server.broadcastSse(session.id, 'status_change', {
         status: queueResult.status,
@@ -1077,6 +1085,9 @@ export function registerCheckoutRoutes(server, ctx) {
       const receivingAccount = ctx.accountRepo.findActiveForMerchant(session.merchantId);
       if (receivingAccount) {
         const queueResult = ctx.queueEngine.enqueueOrActivate(session.id, receivingAccount.id);
+        if (queueResult.amountPaise !== undefined) {
+          session.amountPaise = queueResult.amountPaise;
+        }
         updates += `, receiving_account_id = ?, status = ?, queue_position = ?, expires_at = ?`;
         updateParams.push(
           receivingAccount.id,

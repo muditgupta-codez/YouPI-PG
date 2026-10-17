@@ -170,6 +170,84 @@ export class PaymentSessionRepository {
   }
 
   /**
+   * Activates a session alongside any other live session on the account by giving
+   * it a payable amount that no other live session is using.
+   *
+   * Concurrency is safe because attribution matches an observation to a session by
+   * exact amount, so a distinct amount is what keeps two simultaneous payments
+   * unambiguous. The amount the payer sees in the QR is this value.
+   *
+   * @returns {{ status: string|null, queuePosition: number, expiresAt: Date|null,
+   *   amountPaise: number, baseAmountPaise: number, amountAdjusted: boolean }}
+   *   status is null when every candidate amount is already taken, in which case
+   *   the caller must fall back to queueing.
+   */
+  activateWithUniqueAmount(sessionId, receivingAccountId, durationMs = 300000) {
+    return this.db.transaction(() => {
+      const session = this.findById(sessionId);
+      if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+      const baseAmountPaise = Number(session.amountPaise);
+
+      const takenRows = this.db.query(`
+        SELECT amount_paise FROM payment_sessions
+        WHERE receiving_account_id = ? AND status IN (?, ?) AND id != ?
+      `, [receivingAccountId, PaymentStatus.ACTIVE, PaymentStatus.PROCESSING, sessionId]);
+      const taken = new Set(takenRows.map((row) => Number(row.amount_paise)));
+
+      // Keep the requested amount when it is free, so the common single-payment
+      // case is charged exactly what was asked for.
+      let amountPaise = null;
+      if (!taken.has(baseAmountPaise)) {
+        amountPaise = baseAmountPaise;
+      } else {
+        for (let offset = 1; offset <= 99; offset += 1) {
+          if (!taken.has(baseAmountPaise + offset)) {
+            amountPaise = baseAmountPaise + offset;
+            break;
+          }
+        }
+      }
+
+      if (amountPaise === null) {
+        return {
+          status: null,
+          queuePosition: 0,
+          expiresAt: null,
+          amountPaise: baseAmountPaise,
+          baseAmountPaise,
+          amountAdjusted: false
+        };
+      }
+
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const expiresAt = new Date(now.getTime() + durationMs).toISOString();
+
+      this.db.execute(`
+        UPDATE payment_sessions
+        SET amount_paise = ?, status = ?, slot_acquired_at = ?, expires_at = ?, queue_position = 0, updated_at = ?
+        WHERE id = ?
+      `, [amountPaise, PaymentStatus.ACTIVE, nowIso, expiresAt, nowIso, sessionId]);
+
+      this.db.execute(`
+        UPDATE payment_receiving_accounts
+        SET is_slot_busy = 1, current_active_session_id = ?, updated_at = ?
+        WHERE id = ?
+      `, [sessionId, nowIso, receivingAccountId]);
+
+      return {
+        status: PaymentStatus.ACTIVE,
+        queuePosition: 0,
+        expiresAt: new Date(expiresAt),
+        amountPaise,
+        baseAmountPaise,
+        amountAdjusted: amountPaise !== baseAmountPaise
+      };
+    });
+  }
+
+  /**
    * Transitions an ACTIVE session to PROCESSING upon customer clicking Payment Done.
    * Starts independent 30-second verification timer.
    */

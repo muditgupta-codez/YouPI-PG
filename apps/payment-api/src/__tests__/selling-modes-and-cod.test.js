@@ -178,8 +178,10 @@ describe('Architectural Update: Selling Modes (Online vs Offline), COD Flow, & C
       }
     });
     const paymentIdB = payBRes.body.paymentId;
-    assert.equal(payBRes.body.status, PaymentStatus.QUEUED);
-    assert.equal(payBRes.body.queuePosition, 1);
+    // No queue: ₹1200 is distinct from A's ₹899, so it activates on its own amount
+    assert.equal(payBRes.body.status, PaymentStatus.ACTIVE);
+    assert.equal(payBRes.body.queuePosition, 0);
+    assert.equal(payBRes.body.amount, '1200.00');
 
     // Customer A switches to COD and confirms Cash on Delivery order
     const confirmCodRes = await request(`/api/v1/checkout/${paymentIdA}/confirm-cod`, {

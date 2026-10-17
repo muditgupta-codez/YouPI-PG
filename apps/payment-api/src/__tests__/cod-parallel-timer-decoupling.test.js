@@ -83,7 +83,7 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     });
   }
 
-  test('Switching from UPI to COD decouples UPI queue, promotes queued customer, and starts parallel 5-min timer', async () => {
+  test('Switching from UPI to COD decouples the UPI slot, keeps the concurrent payer active, and starts a parallel 5-min timer', async () => {
     // 1. Session A starts on UPI and holds the active UPI queue slot
     const payA = await request('/api/v1/payments', {
       method: 'POST',
@@ -103,7 +103,7 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
     const expiringSoon = new Date(Date.now() + 30000);
     testDb.execute(`UPDATE payment_sessions SET expires_at = ? WHERE id = ?`, [expiringSoon.toISOString(), sessionAId]);
 
-    // 2. Session B starts on UPI and enters the queue behind Session A
+    // 2. Session B starts on UPI -> ACTIVE immediately on its own unique amount
     const payB = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -114,8 +114,9 @@ describe('COD Parallel Timer & UPI Queue Decoupling Suite', () => {
       }
     });
     assert.equal(payB.status, 201);
-    assert.equal(payB.body.status, PaymentStatus.QUEUED);
-    assert.equal(payB.body.queuePosition, 1);
+    assert.equal(payB.body.status, PaymentStatus.ACTIVE);
+    assert.equal(payB.body.queuePosition, 0);
+    assert.equal(payB.body.amount, '750.00'); // distinct from A's ₹500, so unchanged
     const sessionBId = payB.body.paymentId;
 
     // 3. Customer A switches payment mode from UPI to COD via /select-method

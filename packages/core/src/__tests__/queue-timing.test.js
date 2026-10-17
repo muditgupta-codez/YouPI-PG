@@ -97,24 +97,25 @@ describe('@youpi/core Queue & Timing Engine Tests', () => {
     assert.equal(res1.status, PaymentStatus.ACTIVE);
     assert.equal(res1.queuePosition, 0);
 
-    // 2. Session 2 enters -> QUEUED at position 1
+    // 2. Session 2 enters while the account is busy -> ACTIVE on its own unique amount
     const res2 = queueEngine.enqueueOrActivate(s2.id, testAccount.id, 300000);
-    assert.equal(res2.status, PaymentStatus.QUEUED);
-    assert.equal(res2.queuePosition, 1);
+    assert.equal(res2.status, PaymentStatus.ACTIVE);
+    assert.equal(res2.queuePosition, 0);
+    assert.equal(res2.amountAdjusted, true);
 
-    // 3. Session 3 enters -> QUEUED at position 2
+    // 3. Session 3 enters -> also ACTIVE, on a third distinct amount
     const res3 = queueEngine.enqueueOrActivate(s3.id, testAccount.id, 300000);
-    assert.equal(res3.status, PaymentStatus.QUEUED);
-    assert.equal(res3.queuePosition, 2);
+    assert.equal(res3.status, PaymentStatus.ACTIVE);
+    assert.equal(res3.queuePosition, 0);
 
-    // Wait estimations
-    const wait2 = queueEngine.calculateEstimatedWaitSeconds(testAccount.id, 1);
-    const wait3 = queueEngine.calculateEstimatedWaitSeconds(testAccount.id, 2);
-    assert.ok(wait2 > 0);
-    assert.ok(wait3 > wait2);
+    // The invariant that makes concurrency safe: no two live sessions share an
+    // amount, so an incoming credit always matches exactly one session.
+    const liveAmounts = [s1, s2, s3].map((s) => Number(sessionRepo.findById(s.id).amountPaise));
+    assert.equal(new Set(liveAmounts).size, 3);
+    assert.equal(liveAmounts[0], 20000);
   });
 
-  test('Timing Engine: 5-minute active window expires and auto-promotes next in queue', async () => {
+  test('Timing Engine: 5-minute active window expires and promotes the next queued session', async () => {
     const s1 = sessionRepo.create({
       merchantId: defaultMerchant.id,
       receivingAccountId: testAccount.id,
@@ -128,8 +129,11 @@ describe('@youpi/core Queue & Timing Engine Tests', () => {
       amountPaise: 20000n
     });
 
-    const res1 = queueEngine.enqueueOrActivate(s1.id, testAccount.id, 50); // expires in 50ms
-    queueEngine.enqueueOrActivate(s2.id, testAccount.id, 50);
+    // Occupy the slot, then queue s2 through the raw primitive. The engine itself
+    // only queues when every candidate amount is already taken.
+    const res1 = sessionRepo.acquireSlotAtomic(s1.id, testAccount.id, 50); // expires in 50ms
+    const queued = sessionRepo.acquireSlotAtomic(s2.id, testAccount.id, 50);
+    assert.equal(queued.status, PaymentStatus.QUEUED);
 
     timingEngine.startActiveTimer(s1.id, res1.expiresAt);
 

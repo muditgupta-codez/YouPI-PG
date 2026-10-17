@@ -214,6 +214,7 @@ export function registerPaymentRoutes(server, ctx) {
 
     const sessionMetadata = {
       ...(body.metadata || {}),
+      requestedAmountPaise: Number(amountPaise),
       ...(receivingAccountSnapshot ? { receivingAccountSnapshot } : {})
     };
 
@@ -246,22 +247,31 @@ export function registerPaymentRoutes(server, ctx) {
       if (queueResult.expiresAt) {
         ctx.timingEngine.startActiveTimer(session.id, queueResult.expiresAt);
       }
+
+      // A busy account yields a unique payable amount rather than a queue slot, so
+      // the amount the customer must pay may differ from the one requested.
+      const payableAmountPaise = queueResult.amountPaise !== undefined && queueResult.amountPaise !== null
+        ? Number(queueResult.amountPaise)
+        : Number(amountPaise);
+      session.amountPaise = payableAmountPaise;
+
       server.broadcastSse('admin_counter_events', 'status_change', {
         status: queueResult.status,
         sessionId: session.id,
         orderId: session.orderId,
-        amountPaise: session.amountPaise ? session.amountPaise.toString() : '0'
+        amountPaise: String(payableAmountPaise)
       });
     }
 
     HttpServer.json(res, 201, {
       paymentId: session.id,
       orderId: session.orderId,
-      amount: toRupeesString(amountPaise),
-      amountPaise: amountPaise.toString(),
+      amount: toRupeesString(session.amountPaise),
+      amountPaise: String(Number(session.amountPaise)),
       currency: session.currency,
       status: queueResult.status,
       queuePosition: queueResult.queuePosition,
+      amountAdjusted: Boolean(queueResult.amountAdjusted),
       checkoutUrl: `${resolveCheckoutBaseUrl(merchant)}/checkout/${session.id}`
     });
   });

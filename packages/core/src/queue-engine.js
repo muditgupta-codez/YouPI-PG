@@ -17,20 +17,33 @@ export class QueueEngine {
   }
 
   /**
-   * Attempts to acquire an active slot or places the session into the queue.
+   * Activates a payment. A busy account no longer makes the customer wait: the
+   * session is activated alongside the others with its own unique payable amount,
+   * which is what keeps concurrent payments attributable. Queueing remains only
+   * as a last resort, when every candidate amount is already taken.
    * @param {string} sessionId
    * @param {string} receivingAccountId
    * @param {number} [activeDurationMs=300000]
-   * @returns {{ status: string, queuePosition: number, expiresAt: Date | null }}
+   * @returns {{ status: string, queuePosition: number, expiresAt: Date | null,
+   *   amountPaise?: number, baseAmountPaise?: number, amountAdjusted?: boolean }}
    */
   enqueueOrActivate(sessionId, receivingAccountId, activeDurationMs = 300000) {
-    const result = this.sessionRepo.acquireSlotAtomic(sessionId, receivingAccountId, activeDurationMs);
+    let result = this.sessionRepo.acquireSlotAtomic(sessionId, receivingAccountId, activeDurationMs);
+
+    if (result.status !== PaymentStatus.ACTIVE) {
+      const unique = this.sessionRepo.activateWithUniqueAmount(sessionId, receivingAccountId, activeDurationMs);
+      if (unique.status === PaymentStatus.ACTIVE) {
+        result = unique;
+      }
+    }
 
     if (result.status === PaymentStatus.ACTIVE) {
       this.eventEmitter.emit('SESSION.ACTIVATED', {
         sessionId,
         receivingAccountId,
-        expiresAt: result.expiresAt
+        expiresAt: result.expiresAt,
+        amountPaise: result.amountPaise,
+        amountAdjusted: Boolean(result.amountAdjusted)
       });
 
       if (this.auditRepo) {
@@ -39,8 +52,28 @@ export class QueueEngine {
           entityId: sessionId,
           action: 'PAYMENT_SLOT_ACTIVATED',
           actorType: 'SYSTEM',
-          details: { receivingAccountId, expiresAt: result.expiresAt?.toISOString() }
+          details: {
+            receivingAccountId,
+            expiresAt: result.expiresAt?.toISOString(),
+            amountPaise: result.amountPaise,
+            baseAmountPaise: result.baseAmountPaise,
+            amountAdjusted: Boolean(result.amountAdjusted)
+          }
         });
+
+        if (result.amountAdjusted) {
+          this.auditRepo.log({
+            entityType: 'PAYMENT_SESSION',
+            entityId: sessionId,
+            action: 'PAYMENT_AMOUNT_ADJUSTED_FOR_CONCURRENCY',
+            actorType: 'SYSTEM',
+            details: {
+              receivingAccountId,
+              requestedAmountPaise: result.baseAmountPaise,
+              payableAmountPaise: result.amountPaise
+            }
+          });
+        }
       }
     } else {
       this.eventEmitter.emit('SESSION.QUEUED', {

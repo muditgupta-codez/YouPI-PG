@@ -173,7 +173,8 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
     assert.equal(payA.body.status, PaymentStatus.ACTIVE);
     assert.equal(payA.body.queuePosition, 0);
 
-    // 3. Customer B creates a digital UPI payment and is placed in QUEUED
+    // 3. Customer B creates a digital UPI payment -> ACTIVE on a unique amount,
+    //    so a concurrent payer never waits in a queue
     const payB = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -184,8 +185,11 @@ describe('Phase 15: Counter Payments (Cash & Card at Counter)', () => {
       }
     });
     assert.equal(payB.status, 201);
-    assert.equal(payB.body.status, PaymentStatus.QUEUED);
-    assert.equal(payB.body.queuePosition, 1);
+    assert.equal(payB.body.status, PaymentStatus.ACTIVE);
+    assert.equal(payB.body.queuePosition, 0);
+    assert.equal(payB.body.amountAdjusted, true);
+    assert.equal(payB.body.amount, '300.01'); // base amount was taken by customer A
+    assert.notEqual(payB.body.amountPaise, payA.body.amountPaise);
 
     // 4. Customer A decides to switch to CASH_COUNTER!
     const switchRes = await request(`/api/v1/checkout/${payA.body.paymentId}/select-method`, {

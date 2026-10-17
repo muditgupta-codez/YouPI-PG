@@ -64,7 +64,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.ok(res.body.recoveryStats);
   });
 
-  test('Complete payment lifecycle: creation, queue, payment-done, observation attribution & promotion', async () => {
+  test('Complete payment lifecycle: concurrent creation, payment-done, observation attribution & settle', async () => {
     // 1. Create first payment session (Customer A -> ₹200)
     const payA = await request('/api/v1/payments', {
       method: 'POST',
@@ -97,8 +97,12 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     });
 
     assert.equal(payB.status, 201);
-    assert.equal(payB.body.status, PaymentStatus.QUEUED);
-    assert.equal(payB.body.queuePosition, 1);
+    assert.equal(payB.body.status, PaymentStatus.ACTIVE);
+    assert.equal(payB.body.queuePosition, 0);
+    // The concurrent payer is given its own amount, so a credit still matches
+    // exactly one session without anyone waiting.
+    assert.equal(payB.body.amount, '200.01');
+    assert.notEqual(payB.body.amountPaise, payA.body.amountPaise);
 
     const paymentIdB = payB.body.paymentId;
 
@@ -141,7 +145,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(verifyA.body.status, 'SUCCESS');
     assert.ok(verifyA.body.completedAt);
 
-    // 7. Verify Payment B has been automatically promoted to ACTIVE in the queue!
+    // 7. Verify Payment B — which never had to wait — is still ACTIVE on its own amount
     const stateB = await request(`/api/v1/checkout/${paymentIdB}/state`);
     assert.equal(stateB.status, 200);
     assert.equal(stateB.body.status, PaymentStatus.ACTIVE);
@@ -421,7 +425,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     assert.equal(stateAfterAuth.body.canClickPaymentDone, true);
   });
 
-  test('Queue Sync Invariant: When Session A expires, queued Session B is immediately promoted to ACTIVE with armed timer', async () => {
+  test('Concurrency Invariant: when Session A expires, concurrent Session B keeps its own ACTIVE slot, timer and QR', async () => {
     // Ensure slot and queue are clean
     testDb.execute(`
       UPDATE payment_sessions
@@ -434,7 +438,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
       WHERE id = ?
     `, ['00000000-0000-0000-0000-000000000002']);
 
-    // 1. Session A is ACTIVE
+    // 1. Session A is ACTIVE on the requested amount
     const payA = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -445,8 +449,9 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     });
     assert.equal(payA.body.status, PaymentStatus.ACTIVE);
     assert.equal(payA.body.queuePosition, 0);
+    assert.equal(payA.body.amount, '200.00');
 
-    // 2. Session B is created and placed in QUEUED
+    // 2. Session B starts concurrently -> ACTIVE straight away on its own amount
     const payB = await request('/api/v1/payments', {
       method: 'POST',
       body: {
@@ -455,8 +460,9 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
         autoActivate: true
       }
     });
-    assert.equal(payB.body.status, PaymentStatus.QUEUED);
-    assert.equal(payB.body.queuePosition, 1);
+    assert.equal(payB.body.status, PaymentStatus.ACTIVE);
+    assert.equal(payB.body.queuePosition, 0);
+    assert.equal(payB.body.amount, '200.01');
 
     // 3. User A expires (via client expiry trigger / endpoint)
     const expireRes = await request(`/api/v1/checkout/${payA.body.paymentId}/expire`, {
@@ -468,7 +474,7 @@ describe('Payment API End-to-End HTTP Integration Tests', () => {
     const checkA = await request(`/api/v1/payments/${payA.body.paymentId}`);
     assert.equal(checkA.body.status, 'EXPIRED');
 
-    // 4. Session B MUST now be ACTIVE!
+    // 4. Session B is untouched by A's expiry: still ACTIVE with its own timer and QR
     const checkB = await request(`/api/v1/checkout/${payB.body.paymentId}/state`);
     assert.equal(checkB.body.status, PaymentStatus.ACTIVE);
     assert.equal(checkB.body.queuePosition, 0);

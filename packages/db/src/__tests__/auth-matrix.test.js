@@ -495,7 +495,7 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
     });
     assert.equal(nonMerchantAccount.isMerchantEnabled, false);
 
-    // 47. Queue logic works
+    // 47. Concurrent payments get distinct amounts instead of queueing
     const qPay1 = sessionRepo.create({
       merchantId: merchant.id,
       receivingAccountId: receivingAccount.id,
@@ -514,8 +514,13 @@ test('Full 53-Point Customer Identity, Authentication & Payment Invariant Matrix
       status: PaymentStatus.INITIATED
     });
     const qRes2 = queueEngine.enqueueOrActivate(qPay2.id, receivingAccount.id);
-    assert.equal(qRes2.status, PaymentStatus.QUEUED);
-    assert.equal(qRes2.queuePosition, 1);
+    assert.equal(qRes2.status, PaymentStatus.ACTIVE);
+    assert.equal(qRes2.queuePosition, 0);
+    assert.equal(qRes2.amountAdjusted, true);
+    assert.notEqual(
+      Number(sessionRepo.findById(qPay2.id).amountPaise),
+      Number(sessionRepo.findById(qPay1.id).amountPaise)
+    );
 
     // 48. Timing logic works
     const proc = timingEngine.handlePaymentDone(qPay1.id);
